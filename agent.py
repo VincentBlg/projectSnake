@@ -5,8 +5,8 @@ import random
 import numpy as np
 from collections import deque
 from game import SnakeGameAI, Direction, Point
-from model import Linear_QNet, QTrainer
-from helpers import plot    
+from model import QNet, QTrainer
+from plot import plot    
 
 
 MAX_MEMORY = 100_000
@@ -20,45 +20,57 @@ class Agent:
         self.epsilon = 0
         self.gamma = 0.9
         self.memory = deque(maxlen=MAX_MEMORY)
-        self.model = Linear_QNet(11,512,3)
+        self.model = QNet(11,256,3)
         self.trainer = QTrainer(self.model , lr=LR, gamma=self.gamma)
 
     def get_state(self,game):
         head = game.snake[0]
-        point_l = Point(head.x - 20, head.y)
-        point_r = Point(head.x + 20, head.y)
-        point_u = Point(head.x, head.y - 20)
-        point_d = Point(head.x, head.y + 20)
+        point_left = Point(head.x - 20, head.y)
+        point_right = Point(head.x + 20, head.y)
+        point_up = Point(head.x, head.y - 20)
+        point_down = Point(head.x, head.y + 20)
         
-        dir_l = game.direction == Direction.LEFT
-        dir_r = game.direction == Direction.RIGHT
-        dir_u = game.direction == Direction.UP
-        dir_d = game.direction == Direction.DOWN
+        direction_left = game.direction == Direction.LEFT
+        direction_right = game.direction == Direction.RIGHT
+        direction_up = game.direction == Direction.UP
+        direction_down = game.direction == Direction.DOWN
 
-        state = [
+        # state = []                                        State for the model w/ 85 values
+        # for i in range (-4,5):
+        #     for j in range (-4,5):
+        #         point = Point(head.x + 20*i, head.y - 20*j)
+        #         state.append(game.is_collision(point))
+        
+
+        # state.append(game.food.x < game.head.x)
+        # state.append(game.food.x > game.head.x)  # food right
+        # state.append(game.food.y < game.head.y)  # food up
+        # state.append(game.food.y > game.head.y)
+
+        state = [     #state for the model with 11 values
             # Danger straight
-            (dir_r and game.is_collision(point_r)) or 
-            (dir_l and game.is_collision(point_l)) or 
-            (dir_u and game.is_collision(point_u)) or 
-            (dir_d and game.is_collision(point_d)),
+            (direction_right and game.is_collision(point_right)) or 
+            (direction_left and game.is_collision(point_left)) or 
+            (direction_up and game.is_collision(point_up)) or 
+            (direction_down and game.is_collision(point_down)),
 
             # Danger right
-            (dir_u and game.is_collision(point_r)) or 
-            (dir_d and game.is_collision(point_l)) or 
-            (dir_l and game.is_collision(point_u)) or 
-            (dir_r and game.is_collision(point_d)),
+            (direction_up and game.is_collision(point_right)) or 
+            (direction_down and game.is_collision(point_left)) or 
+            (direction_left and game.is_collision(point_up)) or 
+            (direction_right and game.is_collision(point_down)),
 
             # Danger left
-            (dir_d and game.is_collision(point_r)) or 
-            (dir_u and game.is_collision(point_l)) or 
-            (dir_r and game.is_collision(point_u)) or 
-            (dir_l and game.is_collision(point_d)),
+            (direction_down and game.is_collision(point_right)) or 
+            (direction_up and game.is_collision(point_left)) or 
+            (direction_right and game.is_collision(point_up)) or 
+            (direction_left and game.is_collision(point_down)),
             
             # Move direction
-            dir_l,
-            dir_r,
-            dir_u,
-            dir_d,
+            direction_left,
+            direction_right,
+            direction_up,
+            direction_down,
             
             # Food location 
             game.food.x < game.head.x,  # food left
@@ -86,14 +98,14 @@ class Agent:
 
 
     def get_action(self,state):
-        self.epsilon = 80 - self.n_games/4
-        final_move = [0,0,0]
+        self.epsilon = 80 - self.n_games/2 # the epsilon parameter allow us to move randomly in the begining 
+        final_move = [0,0,0]               # to gather information 
         if random.randint(0, 200) < self.epsilon:
             move = random.randint(0, 2)
             final_move[move] = 1
         else:
-            state0 = torch.tensor(state, dtype=torch.float)
-            prediction = self.model(state0)
+            state_pred = torch.tensor(state, dtype=torch.float)
+            prediction = self.model(state_pred)
             move = torch.argmax(prediction).item()
             final_move[move] = 1
 
@@ -102,18 +114,18 @@ class Agent:
 def train():
     plot_scores = []
     plot_mean_scores = []
+    plot_test = []
+    moove_mean = []
     total_score = 0
     record = 0
     agent = Agent()
+    # agent.model.load()
     game = SnakeGameAI()
     while True:
         state_old = agent.get_state(game)
-
         final_move = agent.get_action(state_old)
-
         reward,done,score = game.play_step(final_move)
         state_new = agent.get_state(game)
-
         agent.train_short_memory(state_old,final_move,reward,state_new,done)
         agent.remember(state_old,final_move,reward,state_new,done)
         if done:
@@ -122,15 +134,26 @@ def train():
             agent.train_long_memory()
             if score>record:
                 record = score
-                agent.model.save()
-            
+                agent.model.save("new_model.pth")
+
             print('game',agent.n_games,"score",score,"record",record )
+
+            if len(moove_mean)<100:  #for the plots
+                moove_mean.append(score)
+                plot_test.append(sum(moove_mean)/len(moove_mean))
+            else:
+                moove_mean.append(score)
+                moove_mean.pop(0)
+                plot_test.append(sum(moove_mean)/len(moove_mean))
+            
 
             plot_scores.append(score)
             total_score += score
             mean_score = total_score / agent.n_games
             plot_mean_scores.append(mean_score)
-            # plot(plot_scores, plot_mean_scores)
+            if agent.n_games%500 == 0:
+                plot(plot_test)
+
 
 if __name__ == '__main__':
     train()
